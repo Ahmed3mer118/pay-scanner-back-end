@@ -1,34 +1,74 @@
-const path = require('path');
-const { enhanceImage, computeImageHash, saveBuffer, cleanupFile } = require('./imageService');
+const {
+  enhanceImage,
+  computeImageHash,
+  resolveImageInput,
+} = require('./imageService');
+
 const { extractText, detectPaymentProvider } = require('./ocrService');
 const { parseWithAI, validateParsedData } = require('./aiService');
 const { appendTransfer } = require('./sheetsService');
+const {
+  uploadBufferToCloudinary,
+  deleteCloudinaryAsset,
+} = require('../utils/uploadToCloudinary');
+
 const Transfer = require('../models/Transfer');
 const { Log } = require('../models/Log');
 
 /**
- * Full pipeline: buffer → enhance → OCR → AI parse → validate → save
+ * Full pipeline:
+ * buffer/base64 → enhance buffer → Cloudinary upload → OCR → AI parse → Mongo save
+ *
+ * Vercel compatible
+ * No filesystem used
  */
-const processScreenshot = async ({ buffer, filename, source = 'telegram', telegramMeta = {} }) => {
-  let rawPath = null;
-  let enhancedPath = null;
+const processScreenshot = async ({
+  buffer,
+  base64,
+  mimeType,
+  filename,
+  source = 'telegram',
+  telegramMeta = {},
+}) => {
   const log = [];
+  let uploadedImage = null;
 
   try {
-    // 1. Save raw buffer
-    const saved = await saveBuffer(buffer, filename);
-    rawPath = saved.filePath;
-    log.push('Image saved');
+    /**
+     * 1. Convert incoming data to buffer
+     */
+    const {
+      buffer: imageBuffer,
+    } = resolveImageInput({
+      buffer,
+      base64,
+      mimeType,
+    });
 
-    // 2. Compute hash for duplicate detection
-    const imageHash = computeImageHash(buffer);
+    log.push('Image buffer loaded');
+
+    /**
+     * 2. Compute image hash
+     */
+    const imageHash = computeImageHash(imageBuffer);
+
     log.push(`Hash computed: ${imageHash.slice(0, 8)}...`);
 
-    // 3. Check duplicate by hash
+    /**
+     * 3. Duplicate check by image hash
+     */
     const existingByHash = await Transfer.findOne({ imageHash });
+
     if (existingByHash) {
-      cleanupFile(rawPath);
-      await saveLog('warn', 'Duplicate image hash detected', { imageHash, existingId: existingByHash._id });
+      await saveLog(
+        'warn',
+        'Duplicate image hash detected',
+        {
+          imageHash,
+          existingId: existingByHash._id,
+        }
+      );
+
       return {
         success: false,
         status: 'duplicate',
@@ -37,67 +77,132 @@ const processScreenshot = async ({ buffer, filename, source = 'telegram', telegr
       };
     }
 
-    // 4. Enhance image for OCR
-    const enhanced = await enhanceImage(rawPath);
-    enhancedPath = enhanced.outputPath;
+    /**
+     * 4. Enhance image
+     */
+    const enhancedBuffer = await enhanceImage(imageBuffer);
+
     log.push('Image enhanced');
 
-    // 5. OCR
-    const { text: ocrText, confidence: ocrConfidence } = await extractText(enhancedPath);
+    /**
+     * 5. Upload enhanced image to Cloudinary
+     */
+    uploadedImage = await uploadBufferToCloudinary({
+      buffer: enhancedBuffer,
+      filename: filename || `${imageHash}.png`,
+    });
+
+    log.push('Image uploaded to Cloudinary');
+
+    /**
+     * 6. OCR
+     */
+    const {
+      text: ocrText,
+      confidence: ocrConfidence,
+    } = await extractText(enhancedBuffer);
+
     log.push(`OCR done, confidence: ${ocrConfidence}%`);
 
+    /**
+     * 7. OCR validation
+     */
     if (!ocrText || ocrConfidence < 20) {
       const transfer = await Transfer.create({
+        imageUrl: uploadedImage.secure_url,
         imageHash,
-        imagePath: saved.filename,
-        imageUrl: `/uploads/${saved.filename}`,
         ocrRawText: ocrText,
         ocrConfidence,
         status: 'failed_ocr',
         source,
         ...telegramMeta,
       });
-      cleanupFile(enhancedPath);
-      return { success: false, status: 'failed_ocr', transferId: transfer._id, message: 'OCR failed or returned low confidence text.' };
+
+      uploadedImage = null;
+
+      return {
+        success: false,
+        status: 'failed_ocr',
+        transferId: transfer._id,
+        message: 'OCR failed or returned low confidence text.',
+      };
     }
 
-    // 6. Detect provider from OCR text
-    const detectedProvider = detectPaymentProvider(ocrText);
+    /**
+     * 8. Detect provider
+     */
+    const detectedProvider =
+      detectPaymentProvider(ocrText);
+
     log.push(`Provider detected: ${detectedProvider}`);
 
-    // 7. AI parsing
-    const parsed = await parseWithAI(ocrText, enhancedPath);
-    if (parsed.paymentMethod === 'Unknown' && detectedProvider !== 'Unknown') {
+    /**
+     * 9. AI parsing
+     */
+    const parsed = await parseWithAI(ocrText);
+
+    if (
+      parsed.paymentMethod === 'Unknown' &&
+      detectedProvider !== 'Unknown'
+    ) {
       parsed.paymentMethod = detectedProvider;
     }
+
     log.push('AI parsing complete');
 
-    // 8. Check duplicate by transaction ID
+    /**
+     * 10. Duplicate check by transaction ID
+     */
     if (parsed.transactionId) {
-      const existingByTxId = await Transfer.findOne({ transactionId: parsed.transactionId });
+      const existingByTxId =
+        await Transfer.findOne({
+          transactionId: parsed.transactionId,
+        });
+
       if (existingByTxId) {
-        cleanupFile(rawPath);
-        cleanupFile(enhancedPath);
+        await deleteUploadedImage(uploadedImage);
+        uploadedImage = null;
+
         return {
           success: false,
           status: 'duplicate',
-          message: `Transaction ID ${parsed.transactionId} already exists.`,
+          message:
+            `Transaction ID ${parsed.transactionId} already exists.`,
           duplicateOf: existingByTxId._id,
         };
       }
     }
 
-    // 9. AI validation
-    const allHashes = await Transfer.distinct('imageHash');
-    const aiValidation = validateParsedData(parsed, imageHash, allHashes);
-    log.push(`Validation score: ${aiValidation.overallScore}%`);
+    /**
+     * 11. AI validation
+     */
+    const allHashes =
+      await Transfer.distinct('imageHash');
 
-    // 10. Determine status
+    const aiValidation = validateParsedData(
+      parsed,
+      imageHash,
+      allHashes
+    );
+
+    log.push(
+      `Validation score: ${aiValidation.overallScore}%`
+    );
+
+    /**
+     * 12. Determine status
+     */
     let status = 'pending';
-    if (aiValidation.tamperingDetected) status = 'suspicious';
-    else if (aiValidation.overallScore >= 70) status = 'pending';
 
-    // 11. Save to MongoDB
+    if (aiValidation.tamperingDetected) {
+      status = 'suspicious';
+    } else if (aiValidation.overallScore >= 70) {
+      status = 'pending';
+    }
+
+    /**
+     * 13. Save transfer
+     */
     const transfer = await Transfer.create({
       transactionId: parsed.transactionId,
       senderName: parsed.senderName,
@@ -105,13 +210,17 @@ const processScreenshot = async ({ buffer, filename, source = 'telegram', telegr
       receiverName: parsed.receiverName,
       receiverPhone: parsed.receiverPhone,
       amount: parsed.amount,
-      currency: parsed.currency || 'EGP',
-      paymentMethod: parsed.paymentMethod,
-      transferDate: parsed.transferDate ? new Date(parsed.transferDate) : new Date(),
+      currency:
+        parsed.currency || 'EGP',
+      paymentMethod:
+        parsed.paymentMethod,
+      transferDate:
+        parsed.transferDate
+          ? new Date(parsed.transferDate)
+          : new Date(),
       status,
+      imageUrl: uploadedImage.secure_url,
       imageHash,
-      imagePath: saved.filename,
-      imageUrl: `/uploads/${saved.filename}`,
       ocrRawText: ocrText,
       ocrConfidence,
       aiParsed: true,
@@ -120,42 +229,101 @@ const processScreenshot = async ({ buffer, filename, source = 'telegram', telegr
       ...telegramMeta,
     });
 
-    // 12. Sync to Google Sheets
+    uploadedImage = null;
+
+    /**
+     * 14. Sync Google Sheets
+     */
     try {
-      const rowIndex = await appendTransfer(transfer);
+      const rowIndex =
+        await appendTransfer(transfer);
+
       if (rowIndex) {
-        await Transfer.findByIdAndUpdate(transfer._id, { sheetsSynced: true, sheetsRowIndex: rowIndex });
+
+        await Transfer.findByIdAndUpdate(
+          transfer._id,
+          {
+            sheetsSynced: true,
+            sheetsRowIndex: rowIndex,
+          }
+        );
       }
+
     } catch (sheetErr) {
-      console.warn('Sheets sync failed:', sheetErr.message);
+
+      console.warn(
+        'Sheets sync failed:',
+        sheetErr.message
+      );
     }
 
-    cleanupFile(enhancedPath);
     log.push('Transfer saved');
 
+    /**
+     * 15. Success response
+     */
     return {
       success: true,
       status,
       transferId: transfer._id,
       transfer,
       aiValidation,
-      message: status === 'suspicious'
-        ? '⚠️ Transfer saved but flagged as suspicious.'
-        : '✅ Transfer processed and saved successfully.',
+      message:
+        status === 'suspicious'
+          ? '⚠️ Transfer saved but flagged as suspicious.'
+          : '✅ Transfer processed and saved successfully.',
     };
   } catch (error) {
     console.error('Pipeline error:', error);
-    if (rawPath) cleanupFile(rawPath);
-    if (enhancedPath) cleanupFile(enhancedPath);
-    await saveLog('error', 'Pipeline failed', { error: error.message });
+
+    await deleteUploadedImage(uploadedImage);
+
+    await saveLog(
+      'error',
+      'Pipeline failed',
+      {
+        error: error.message,
+        source,
+        filename,
+      }
+    );
+
     throw error;
   }
 };
 
-const saveLog = async (level, message, context) => {
+/**
+ * Save logs
+ */
+const saveLog = async (
+  level,
+  message,
+  context
+) => {
+
   try {
-    await Log.create({ level, message, context });
+
+    await Log.create({
+      level,
+      message,
+      context,
+    });
+
   } catch (e) {}
 };
 
-module.exports = { processScreenshot };
+const deleteUploadedImage = async (uploadedImage) => {
+  if (!uploadedImage?.public_id) {
+    return;
+  }
+
+  try {
+    await deleteCloudinaryAsset(uploadedImage.public_id);
+  } catch (error) {
+    console.warn('Cloudinary cleanup failed:', error.message);
+  }
+};
+
+module.exports = {
+  processScreenshot,
+};

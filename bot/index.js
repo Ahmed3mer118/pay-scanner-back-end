@@ -4,7 +4,7 @@ const { Telegraf } = require('telegraf');
 const fetch = require('node-fetch');
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-const BACKEND_URL = process.env.MONGODB_URI || 'http://localhost:5000';
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:5000';
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID;
 
 // Welcome message
@@ -31,7 +31,7 @@ bot.help((ctx) => {
     { parse_mode: 'Markdown' }
   );
 });
-
+  
 bot.command('status', async (ctx) => {
   try {
     const res = await fetch(`${BACKEND_URL}/api/health`);
@@ -42,17 +42,15 @@ bot.command('status', async (ctx) => {
   }
 });
 
-// Handle photo messages
-bot.on('photo', async (ctx) => {
+const processTelegramImage = async ({
+  ctx,
+  fileId,
+  filename,
+  mimeType = 'image/jpeg',
+}) => {
   const processingMsg = await ctx.reply('⏳ Processing your screenshot...');
 
   try {
-    // Get highest resolution photo
-    const photos = ctx.message.photo;
-    const photo = photos[photos.length - 1];
-    const fileId = photo.file_id;
-
-    // Download file from Telegram
     const fileLink = await ctx.telegram.getFileLink(fileId);
     const imageRes = await fetch(fileLink.href);
     const arrayBuffer = await imageRes.arrayBuffer();
@@ -65,7 +63,6 @@ bot.on('photo', async (ctx) => {
       telegramUsername: ctx.from.username || ctx.from.first_name,
     };
 
-    // Send to backend processing pipeline
     const response = await fetch(`${BACKEND_URL}/api/bot/screenshot`, {
       method: 'POST',
       headers: {
@@ -73,18 +70,23 @@ bot.on('photo', async (ctx) => {
         'x-bot-secret': process.env.JWT_SECRET,
       },
       body: JSON.stringify({
-        buffer: base64,
-        filename: `${fileId}.jpg`,
+        base64,
+        filename,
+        mimeType,
+        source: 'telegram',
         telegramMeta,
       }),
     });
 
-    const result = await response.json();
+    const rawResult = await response.text();
+    const result = rawResult ? JSON.parse(rawResult) : {};
 
-    // Delete processing message
+    if (!response.ok && !result.status && !result.success) {
+      throw new Error(result.error || `Backend request failed with status ${response.status}`);
+    }
+
     await ctx.telegram.deleteMessage(ctx.chat.id, processingMsg.message_id).catch(() => {});
 
-    // Reply based on result
     if (result.status === 'duplicate') {
       await ctx.reply(
         `🔁 *Duplicate Screenshot Detected*\n\nThis transfer has already been submitted and is in our system.\nTransaction ID: ${result.duplicateOf || 'N/A'}`,
@@ -100,7 +102,7 @@ bot.on('photo', async (ctx) => {
         `⚠️ *Screenshot Flagged*\n\nThis transfer was saved but flagged for admin review.\nOur team will verify it shortly.`,
         { parse_mode: 'Markdown' }
       );
-      // Notify admin
+
       if (ADMIN_CHAT_ID) {
         await ctx.telegram.sendMessage(
           ADMIN_CHAT_ID,
@@ -111,6 +113,7 @@ bot.on('photo', async (ctx) => {
     } else if (result.success) {
       const t = result.transfer;
       const amountStr = t.amount ? `EGP ${t.amount.toLocaleString()}` : 'N/A';
+
       await ctx.reply(
         `✅ *Transfer Saved Successfully!*\n\n` +
         `💰 Amount: *${amountStr}*\n` +
@@ -123,13 +126,26 @@ bot.on('photo', async (ctx) => {
         { parse_mode: 'Markdown' }
       );
     } else {
-      await ctx.reply(`❌ Processing failed. Please try again or contact admin.`);
+      await ctx.reply('❌ Processing failed. Please try again or contact admin.');
     }
   } catch (error) {
-    console.error('Bot photo handler error:', error);
+    console.error('Bot image handler error:', error);
     await ctx.telegram.deleteMessage(ctx.chat.id, processingMsg.message_id).catch(() => {});
-    await ctx.reply(`❌ An error occurred. Please try again later.`);
+    await ctx.reply('❌ An error occurred. Please try again later.');
   }
+};
+
+// Handle photo messages
+bot.on('photo', async (ctx) => {
+  const photos = ctx.message.photo;
+  const photo = photos[photos.length - 1];
+
+  await processTelegramImage({
+    ctx,
+    fileId: photo.file_id,
+    filename: `${photo.file_id}.jpg`,
+    mimeType: 'image/jpeg',
+  });
 });
 
 // Handle document (some users send screenshots as files)
@@ -138,9 +154,13 @@ bot.on('document', async (ctx) => {
   if (!doc.mime_type?.startsWith('image/')) {
     return ctx.reply('Please send an image file, not a document.');
   }
-  // Reuse photo logic by forwarding to photo handler with file_id
-  ctx.message.photo = [{ file_id: doc.file_id, file_size: doc.file_size }];
-  bot.handleUpdate({ ...ctx.update, message: ctx.message });
+
+  await processTelegramImage({
+    ctx,
+    fileId: doc.file_id,
+    filename: doc.file_name || `${doc.file_id}.jpg`,
+    mimeType: doc.mime_type,
+  });
 });
 
 bot.on('text', (ctx) => {

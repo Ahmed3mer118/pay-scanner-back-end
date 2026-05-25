@@ -1,5 +1,4 @@
 const OpenAI = require('openai');
-const fs = require('fs');
 
 let openai;
 if (process.env.OPENAI_API_KEY) {
@@ -32,48 +31,46 @@ JSON schema:
 /**
  * Parse OCR text using OpenAI GPT-4
  */
-const parseWithAI = async (ocrText, imagePath = null) => {
+const parseWithAI = async (ocrText) => {
   if (!openai) {
     return fallbackParse(ocrText);
   }
 
   try {
-    const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
-
-    // If image available, use vision
-    if (imagePath && fs.existsSync(imagePath)) {
-      const imageBuffer = fs.readFileSync(imagePath);
-      const base64 = imageBuffer.toString('base64');
-      const ext = imagePath.endsWith('.png') ? 'image/png' : 'image/jpeg';
-
-      messages.push({
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `OCR extracted text:\n\n${ocrText}\n\nAlso analyze the image directly for any missed fields.`,
-          },
-          { type: 'image_url', image_url: { url: `data:${ext};base64,${base64}`, detail: 'high' } },
-        ],
-      });
-    } else {
-      messages.push({ role: 'user', content: `Parse this payment receipt OCR text:\n\n${ocrText}` });
-    }
-
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
-      messages,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: `Parse this payment receipt OCR text:\n\n${ocrText}`,
+        },
+      ],
       max_tokens: 500,
       temperature: 0,
     });
 
     const content = response.choices[0].message.content.trim();
-    return JSON.parse(content);
+    return parseJsonResponse(content);
   } catch (error) {
     console.error('AI parse error:', error.message);
     return fallbackParse(ocrText);
   }
 };
+
+function parseJsonResponse(content) {
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+
+    if (!jsonMatch) {
+      throw error;
+    }
+
+    return JSON.parse(jsonMatch[0]);
+  }
+}
 
 /**
  * Regex-based fallback parser when OpenAI is unavailable
@@ -91,6 +88,8 @@ const fallbackParse = (text) => {
 
   const amount = amounts.length > 0 ? Math.max(...amounts.filter((a) => a > 0)) : null;
 
+  const transferDate = parseDetectedDate(dateMatch?.[1]);
+
   return {
     senderName: null,
     senderPhone: phones[0] || null,
@@ -99,7 +98,7 @@ const fallbackParse = (text) => {
     amount,
     currency: 'EGP',
     transactionId: txMatch ? txMatch[1] : null,
-    transferDate: dateMatch ? new Date(dateMatch[1]).toISOString() : null,
+    transferDate,
     paymentMethod: 'Unknown',
     confidence: 40,
     flags: {
@@ -109,6 +108,20 @@ const fallbackParse = (text) => {
     },
   };
 };
+
+function parseDetectedDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  const parsedDate = new Date(value);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return null;
+  }
+
+  return parsedDate.toISOString();
+}
 
 /**
  * Validate parsed data and compute AI validation object

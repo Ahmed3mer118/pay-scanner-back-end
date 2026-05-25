@@ -22,7 +22,6 @@ const transferSchema = new mongoose.Schema({
 
   // Image data
   imageUrl: { type: String },
-  imagePath: { type: String },
   imageHash: { type: String, index: false },
 
   // OCR & AI
@@ -39,7 +38,7 @@ const transferSchema = new mongoose.Schema({
   },
 
   // Source
-  source: { type: String, enum: ['telegram', 'whatsapp', 'manual', 'api'], default: 'telegram' },
+  source: { type: String, enum: ['telegram', 'whatsapp', 'manual', 'api', 'n8n'], default: 'telegram' },
   telegramMessageId: { type: Number },
   telegramChatId: { type: String },
   telegramUsername: { type: String },

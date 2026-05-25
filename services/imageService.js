@@ -1,60 +1,114 @@
 const sharp = require('sharp');
 const crypto = require('crypto');
-const path = require('path');
-const fs = require('fs');
-
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
-
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
 
 /**
- * Enhance image for better OCR accuracy
+ * Enhance image in memory
  */
-const enhanceImage = async (inputPath) => {
-  const filename = `enhanced_${Date.now()}.png`;
-  const outputPath = path.join(UPLOAD_DIR, filename);
-
-  await sharp(inputPath)
-    .resize({ width: 1200, withoutEnlargement: false })
+const enhanceImage = async (imageBuffer) => {
+  const enhancedBuffer = await sharp(imageBuffer)
+    .rotate()
+    .resize({
+      width: 1200,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
     .greyscale()
     .normalize()
     .sharpen({ sigma: 1.5 })
-    .linear(1.2, -20)    // increase contrast
-    .png({ quality: 100 })
-    .toFile(outputPath);
+    .linear(1.2, -20)
+    .png()
+    .toBuffer();
 
-  return { outputPath, filename };
+  return enhancedBuffer;
 };
 
 /**
- * Compute MD5 hash of image buffer for duplicate detection
+ * Generate image hash
  */
 const computeImageHash = (buffer) => {
-  return crypto.createHash('md5').update(buffer).digest('hex');
+  return crypto
+    .createHash('md5')
+    .update(buffer)
+    .digest('hex');
 };
 
 /**
- * Save raw uploaded buffer to disk
+ * Convert base64 to buffer
  */
-const saveBuffer = async (buffer, originalName = 'screenshot') => {
-  const ext = path.extname(originalName) || '.jpg';
-  const filename = `raw_${Date.now()}${ext}`;
-  const filePath = path.join(UPLOAD_DIR, filename);
-  fs.writeFileSync(filePath, buffer);
-  return { filePath, filename };
-};
-
-/**
- * Clean up temporary files
- */
-const cleanupFile = (filePath) => {
-  try {
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch (e) {
-    console.warn('Cleanup warning:', e.message);
+const base64ToBuffer = (base64) => {
+  if (Buffer.isBuffer(base64)) {
+    return base64;
   }
+
+  if (typeof base64 !== 'string' || !base64.trim()) {
+    throw new Error('A base64 image payload is required.');
+  }
+
+  const sanitizedBase64 = base64
+    .trim()
+    .replace(/^data:[^;]+;base64,/, '')
+    .replace(/\s/g, '');
+
+  if (!/^[A-Za-z0-9+/=]+$/.test(sanitizedBase64)) {
+    throw new Error('Invalid base64 image payload.');
+  }
+
+  const buffer = Buffer.from(sanitizedBase64, 'base64');
+
+  if (!buffer.length) {
+    throw new Error('Decoded image buffer is empty.');
+  }
+
+  return buffer;
 };
 
-module.exports = { enhanceImage, computeImageHash, saveBuffer, cleanupFile };
+/**
+ * Extract mime type from a data URI if present
+ */
+const extractMimeTypeFromBase64 = (value) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const match = value.match(/^data:([^;]+);base64,/i);
+  return match ? match[1].toLowerCase() : null;
+};
+
+/**
+ * Normalize buffer/base64 payloads into a single in-memory shape
+ */
+const resolveImageInput = ({
+  buffer,
+  base64,
+  mimeType,
+}) => {
+  if (Buffer.isBuffer(buffer)) {
+    return {
+      buffer,
+      mimeType: mimeType || 'image/jpeg',
+    };
+  }
+
+  const base64Payload =
+    typeof buffer === 'string'
+      ? buffer
+      : base64;
+
+  const resolvedMimeType =
+    mimeType ||
+    extractMimeTypeFromBase64(base64Payload) ||
+    'image/jpeg';
+
+  return {
+    buffer: base64ToBuffer(base64Payload),
+    mimeType: resolvedMimeType,
+  };
+};
+
+module.exports = {
+  enhanceImage,
+  computeImageHash,
+  base64ToBuffer,
+  extractMimeTypeFromBase64,
+  resolveImageInput,
+};

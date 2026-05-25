@@ -1,6 +1,4 @@
 const multer = require('multer');
-const path = require('path');
-const crypto = require('crypto');
 
 const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
 const MAX_SIZE = 10 * 1024 * 1024; // 10MB

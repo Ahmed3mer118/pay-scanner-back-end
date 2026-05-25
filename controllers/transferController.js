@@ -1,6 +1,7 @@
 const Transfer = require('../models/Transfer');
 const { processScreenshot } = require('../services/processingService');
 const { updateStatus } = require('../services/sheetsService');
+const { resolveImageInput } = require('../services/imageService');
 
 exports.getAll = async (req, res) => {
   try {
@@ -37,7 +38,13 @@ exports.getAll = async (req, res) => {
       pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) },
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    const statusCode =
+      error.message.includes('base64') ||
+      error.message.includes('buffer')
+        ? 400
+        : 500;
+
+    res.status(statusCode).json({ error: error.message });
   }
 };
 
@@ -53,12 +60,40 @@ exports.getOne = async (req, res) => {
 
 exports.upload = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No image provided' });
+    const {
+      buffer,
+      base64,
+      filename,
+      mimeType,
+      source,
+    } = req.body;
+
+    if (!req.file && !buffer && !base64) {
+      return res.status(400).json({
+        error: 'No image provided. Send multipart file or base64 payload.',
+      });
+    }
+
+    const imageInput = req.file
+      ? {
+          buffer: req.file.buffer,
+          mimeType: req.file.mimetype,
+          filename: req.file.originalname,
+        }
+      : {
+          ...resolveImageInput({
+            buffer,
+            base64,
+            mimeType,
+          }),
+          filename: filename || 'api_upload.jpg',
+        };
 
     const result = await processScreenshot({
-      buffer: req.file.buffer,
-      filename: req.file.originalname,
-      source: 'api',
+      buffer: imageInput.buffer,
+      mimeType: imageInput.mimeType,
+      filename: imageInput.filename,
+      source: normalizeSource(source),
     });
 
     const statusCode = result.success ? 201 : result.status === 'duplicate' ? 409 : 422;
@@ -118,4 +153,18 @@ exports.bulkVerify = async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+};
+
+const normalizeSource = (value) => {
+  const allowedSources = new Set([
+    'telegram',
+    'whatsapp',
+    'manual',
+    'api',
+    'n8n',
+  ]);
+
+  return allowedSources.has(value)
+    ? value
+    : 'api';
 };

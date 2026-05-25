@@ -1,12 +1,16 @@
 const Tesseract = require('tesseract.js');
 
 /**
- * Run OCR on an image file path
+ * Run OCR on an in-memory image buffer
  * Returns { text, confidence }
  */
-const extractText = async (imagePath) => {
+const extractText = async (imageBuffer) => {
   try {
-    const result = await Tesseract.recognize(imagePath, 'ara+eng', {
+    if (!Buffer.isBuffer(imageBuffer) || !imageBuffer.length) {
+      throw new Error('OCR requires a non-empty image buffer.');
+    }
+
+    const result = await Tesseract.recognize(imageBuffer, 'ara+eng', {
       logger: () => {},
     });
 

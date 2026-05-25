@@ -4,7 +4,6 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
-const path = require('path');
 const connectDB = require('./utils/db');
 
 const authRoutes = require('./routes/auth');
@@ -13,6 +12,7 @@ const dashboardRoutes = require('./routes/dashboard');
 const botRoutes = require('./routes/bot');
 
 const app = express();
+const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '15mb';
 
 // Connect to MongoDB
 connectDB();
@@ -39,12 +39,9 @@ const botLimiter = rateLimit({
 app.use('/api/bot/', botLimiter);
 
 // Body parsing
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: requestBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
 app.use(morgan('dev'));
-
-// Static uploads
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 app.use('/api/auth', authRoutes);
