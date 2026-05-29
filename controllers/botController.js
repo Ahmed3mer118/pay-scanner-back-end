@@ -8,36 +8,43 @@ exports.receiveScreenshot = async (req, res) => {
       base64,
       filename,
       mimeType,
-      telegramMeta,
       source,
     } = req.body;
 
-    const {
-      buffer: imageBuffer,
-      mimeType: resolvedMimeType,
-    } = resolveImageInput({
-      buffer,
-      base64,
-      mimeType,
-    });
+    let telegramMeta = req.body.telegramMeta;
+    if (typeof telegramMeta === 'string') {
+      try { telegramMeta = JSON.parse(telegramMeta); } catch { telegramMeta = {}; }
+    }
+
+    let imageBuffer;
+    let resolvedMimeType;
+
+    if (req.file) {
+      imageBuffer = req.file.buffer;
+      resolvedMimeType = req.file.mimetype;
+    } else {
+      ({ buffer: imageBuffer, mimeType: resolvedMimeType } = resolveImageInput({
+        buffer,
+        base64,
+        mimeType,
+      }));
+    }
+
+    if (!imageBuffer) {
+      return res.status(400).json({ error: 'No image provided.' });
+    }
 
     const result = await processScreenshot({
       buffer: imageBuffer,
-      mimeType: resolvedMimeType,
-      filename: filename || 'telegram_screenshot.jpg',
+      mimeType: resolvedMimeType || 'image/jpeg',
+      filename: req.file?.originalname || filename || 'telegram_screenshot.jpg',
       source: source || 'telegram',
       telegramMeta: telegramMeta || {},
     });
 
     res.status(getResultStatusCode(result)).json(result);
   } catch (error) {
-    const statusCode =
-      error.message.includes('base64') ||
-      error.message.includes('buffer')
-        ? 400
-        : 500;
-
-    res.status(statusCode).json({ error: error.message });
+    res.status(500).json({ error: error.message });
   }
 };
 

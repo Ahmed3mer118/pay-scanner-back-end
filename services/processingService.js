@@ -37,13 +37,12 @@ const processScreenshot = async ({
     /**
      * 1. Convert incoming data to buffer
      */
-    const {
-      buffer: imageBuffer,
-    } = resolveImageInput({
-      buffer,
-      base64,
-      mimeType,
-    });
+    let imageBuffer;
+    if (Buffer.isBuffer(buffer)) {
+      imageBuffer = buffer;
+    } else {
+      ({ buffer: imageBuffer } = resolveImageInput({ buffer, base64, mimeType }));
+    }
 
     log.push('Image buffer loaded');
 

@@ -66,6 +66,7 @@ exports.upload = async (req, res) => {
       filename,
       mimeType,
       source,
+      telegramMeta,
     } = req.body;
 
     if (!req.file && !buffer && !base64) {
@@ -94,6 +95,7 @@ exports.upload = async (req, res) => {
       mimeType: imageInput.mimeType,
       filename: imageInput.filename,
       source: normalizeSource(source),
+      telegramMeta: telegramMeta || {},
     });
 
     const statusCode = result.success ? 201 : result.status === 'duplicate' ? 409 : 422;

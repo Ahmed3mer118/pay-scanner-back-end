@@ -5,6 +5,13 @@ const crypto = require('crypto');
  * Enhance image in memory
  */
 const enhanceImage = async (imageBuffer) => {
+
+  const metadata = await sharp(imageBuffer).metadata();
+
+  if (!metadata.format) {
+    throw new Error('Unsupported image format');
+  }
+
   const enhancedBuffer = await sharp(imageBuffer)
     .rotate()
     .resize({
@@ -21,7 +28,6 @@ const enhanceImage = async (imageBuffer) => {
 
   return enhancedBuffer;
 };
-
 /**
  * Generate image hash
  */
@@ -82,29 +88,55 @@ const resolveImageInput = ({
   base64,
   mimeType,
 }) => {
-  if (Buffer.isBuffer(buffer)) {
+
+  const imageData = buffer || base64;
+
+  if (!imageData) {
+    throw new Error('No valid image payload provided');
+  }
+
+  if (Buffer.isBuffer(imageData)) {
+    if (imageData.length < 100) {
+      throw new Error('Decoded image is too small or invalid');
+    }
     return {
-      buffer,
+      buffer: imageData,
       mimeType: mimeType || 'image/jpeg',
     };
   }
 
-  const base64Payload =
-    typeof buffer === 'string'
-      ? buffer
-      : base64;
+  if (typeof imageData !== 'string') {
+    throw new Error('No valid image payload provided');
+  }
 
-  const resolvedMimeType =
-    mimeType ||
-    extractMimeTypeFromBase64(base64Payload) ||
-    'image/jpeg';
+  const cleanedBase64 = imageData
+    .replace(/^data:image\/\w+;base64,/, '')
+    .replace(/\s/g, '');
+
+  if (!/^[A-Za-z0-9+/]+=*$/.test(cleanedBase64)) {
+    throw new Error(
+      'Invalid image payload: expected a base64-encoded image, got an unrecognized string. ' +
+      'If using n8n, make sure to send the binary file directly (multipart) or convert it to base64 first.'
+    );
+  }
+
+  let imageBuffer;
+
+  try {
+    imageBuffer = Buffer.from(cleanedBase64, 'base64');
+  } catch (e) {
+    throw new Error('Base64 decoding failed');
+  }
+
+  if (!imageBuffer || imageBuffer.length < 100) {
+    throw new Error('Decoded image is too small or invalid');
+  }
 
   return {
-    buffer: base64ToBuffer(base64Payload),
-    mimeType: resolvedMimeType,
+    buffer: imageBuffer,
+    mimeType: mimeType || 'image/jpeg',
   };
 };
-
 module.exports = {
   enhanceImage,
   computeImageHash,
