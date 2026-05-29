@@ -3,6 +3,11 @@ const { resolveImageInput } = require('../services/imageService');
 
 exports.receiveScreenshot = async (req, res) => {
   try {
+    console.log('[bot] content-type:', req.headers['content-type']);
+    console.log('[bot] req.file:', req.file ? { fieldname: req.file.fieldname, size: req.file.size } : null);
+    console.log('[bot] body keys:', Object.keys(req.body));
+    console.log('[bot] buffer?', !!req.body.buffer, '| base64?', !!req.body.base64, '| base64 length:', req.body.base64?.length);
+
     const {
       buffer,
       base64,
