@@ -1,14 +1,11 @@
+const fetch = require('node-fetch');
 const { processScreenshot } = require('../services/processingService');
 const { resolveImageInput } = require('../services/imageService');
 
 exports.receiveScreenshot = async (req, res) => {
   try {
-    console.log('[bot] content-type:', req.headers['content-type']);
-    console.log('[bot] req.file:', req.file ? { fieldname: req.file.fieldname, size: req.file.size } : null);
-    console.log('[bot] body keys:', Object.keys(req.body));
-    console.log('[bot] buffer?', !!req.body.buffer, '| base64?', !!req.body.base64, '| base64 length:', req.body.base64?.length);
-
     const {
+      filePath,
       buffer,
       base64,
       filename,
@@ -22,17 +19,20 @@ exports.receiveScreenshot = async (req, res) => {
     }
 
     let imageBuffer;
-    let resolvedMimeType;
+    let resolvedMimeType = mimeType || 'image/jpeg';
 
     if (req.file) {
       imageBuffer = req.file.buffer;
       resolvedMimeType = req.file.mimetype;
+    } else if (filePath) {
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      if (!token) return res.status(500).json({ error: 'TELEGRAM_BOT_TOKEN not set' });
+      const telegramUrl = `https://api.telegram.org/file/bot${token}/${filePath}`;
+      const response = await fetch(telegramUrl);
+      if (!response.ok) return res.status(502).json({ error: 'Failed to download image from Telegram' });
+      imageBuffer = Buffer.from(await response.arrayBuffer());
     } else {
-      ({ buffer: imageBuffer, mimeType: resolvedMimeType } = resolveImageInput({
-        buffer,
-        base64,
-        mimeType,
-      }));
+      ({ buffer: imageBuffer, mimeType: resolvedMimeType } = resolveImageInput({ buffer, base64, mimeType }));
     }
 
     if (!imageBuffer) {
@@ -41,7 +41,7 @@ exports.receiveScreenshot = async (req, res) => {
 
     const result = await processScreenshot({
       buffer: imageBuffer,
-      mimeType: resolvedMimeType || 'image/jpeg',
+      mimeType: resolvedMimeType,
       filename: req.file?.originalname || filename || 'telegram_screenshot.jpg',
       source: source || 'telegram',
       telegramMeta: telegramMeta || {},
