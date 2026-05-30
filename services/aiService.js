@@ -151,4 +151,73 @@ const validateParsedData = (parsed, imageHash, existingHashes = []) => {
   };
 };
 
-module.exports = { parseWithAI, validateParsedData, fallbackParse };
+const PAYMENT_METHODS = [
+  'InstaPay',
+  'Vodafone Cash',
+  'Etisalat Cash',
+  'Orange Cash',
+  'Bank Transfer',
+  'Unknown',
+];
+
+const PAYMENT_METHOD_ALIASES = {
+  instapay: 'InstaPay',
+  'insta pay': 'InstaPay',
+  'انستاباي': 'InstaPay',
+  vodafone: 'Vodafone Cash',
+  'vodafone cash': 'Vodafone Cash',
+  'فودافون كاش': 'Vodafone Cash',
+  etisalat: 'Etisalat Cash',
+  'etisalat cash': 'Etisalat Cash',
+  'اتصالات': 'Etisalat Cash',
+  orange: 'Orange Cash',
+  'orange cash': 'Orange Cash',
+  'orange money': 'Orange Cash',
+  bank: 'Bank Transfer',
+  'bank transfer': 'Bank Transfer',
+  'تحويل بنكي': 'Bank Transfer',
+};
+
+const normalizePaymentMethod = (value, fallback = 'Unknown') => {
+  if (!value) return fallback;
+
+  const raw = String(value).trim();
+  const lower = raw.toLowerCase();
+  const alias = PAYMENT_METHOD_ALIASES[lower];
+
+  if (alias) return alias;
+
+  const exact = PAYMENT_METHODS.find((method) => method.toLowerCase() === lower);
+  if (exact) return exact;
+
+  const partial = PAYMENT_METHODS.find(
+    (method) => method !== 'Unknown' && lower.includes(method.toLowerCase())
+  );
+  if (partial) return partial;
+
+  return PAYMENT_METHODS.includes(raw) ? raw : fallback;
+};
+
+const sanitizeParsedData = (parsed, detectedProvider = 'Unknown') => {
+  const safe = { ...parsed };
+
+  safe.paymentMethod = normalizePaymentMethod(
+    safe.paymentMethod,
+    detectedProvider !== 'Unknown' ? detectedProvider : 'Unknown'
+  );
+
+  if (safe.amount != null) {
+    const amount = Number(String(safe.amount).replace(/,/g, ''));
+    safe.amount = Number.isFinite(amount) ? amount : null;
+  }
+
+  return safe;
+};
+
+module.exports = {
+  parseWithAI,
+  validateParsedData,
+  fallbackParse,
+  normalizePaymentMethod,
+  sanitizeParsedData,
+};

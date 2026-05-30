@@ -105,7 +105,18 @@ exports.upload = async (req, res) => {
         : 422;
     res.status(statusCode).json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    if (error.name === 'ValidationError') {
+      const details = Object.values(error.errors || {}).map((e) => e.message);
+      return res.status(400).json({
+        error: 'Transfer validation failed',
+        details,
+      });
+    }
+
+    console.error('Upload error:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to process screenshot',
+    });
   }
 };
 

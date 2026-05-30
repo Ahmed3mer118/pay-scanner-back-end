@@ -5,7 +5,7 @@ const {
 } = require('./imageService');
 
 const { extractText, detectPaymentProvider } = require('./ocrService');
-const { parseWithAI, validateParsedData } = require('./aiService');
+const { parseWithAI, validateParsedData, sanitizeParsedData } = require('./aiService');
 const { appendTransfer } = require('./sheetsService');
 const {
   uploadBufferToCloudinary,
@@ -14,6 +14,12 @@ const {
 
 const Transfer = require('../models/Transfer');
 const { Log } = require('../models/Log');
+
+/** Avoid unique-index collisions while keeping duplicate detection on raw hash */
+const buildStoredImageHash = (imageHash, duplicateOf) => {
+  if (!duplicateOf) return imageHash;
+  return `${imageHash}:dup:${Date.now()}`;
+};
 
 /**
  * Full pipeline:
@@ -57,7 +63,12 @@ const processScreenshot = async ({
     /**
      * 3. Duplicate check by image hash (still process and save)
      */
-    const existingByHash = await Transfer.findOne({ imageHash });
+    const existingByHash = await Transfer.findOne({
+      $or: [
+        { imageHash },
+        { imageHash: new RegExp(`^${imageHash}(:dup:|$)`) },
+      ],
+    });
 
     if (existingByHash) {
       duplicateOf = existingByHash._id;
@@ -105,7 +116,7 @@ const processScreenshot = async ({
     if (!ocrText || ocrConfidence < 20) {
       const transfer = await Transfer.create({
         imageUrl: uploadedImage.secure_url,
-        imageHash,
+        imageHash: buildStoredImageHash(imageHash, duplicateOf),
         ocrRawText: ocrText,
         ocrConfidence,
         status: duplicateOf ? 'duplicate' : 'failed_ocr',
@@ -139,14 +150,10 @@ const processScreenshot = async ({
     /**
      * 9. AI parsing
      */
-    const parsed = await parseWithAI(ocrText);
-
-    if (
-      parsed.paymentMethod === 'Unknown' &&
-      detectedProvider !== 'Unknown'
-    ) {
-      parsed.paymentMethod = detectedProvider;
-    }
+    const parsed = sanitizeParsedData(
+      await parseWithAI(ocrText),
+      detectedProvider
+    );
 
     log.push('AI parsing complete');
 
@@ -214,7 +221,7 @@ const processScreenshot = async ({
           : new Date(),
       status,
       imageUrl: uploadedImage.secure_url,
-      imageHash,
+      imageHash: buildStoredImageHash(imageHash, duplicateOf),
       ocrRawText: ocrText,
       ocrConfidence,
       aiParsed: true,

@@ -14,8 +14,7 @@ const botRoutes = require('./routes/bot');
 const app = express();
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '15mb';
 
-// Connect to MongoDB
-connectDB();
+// MongoDB connection is awaited before listen (see bottom)
 
 // Security middleware
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
@@ -35,7 +34,7 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error(`CORS blocked for origin: ${origin}`));
+      callback(null, false);
     }
   },
   credentials: true,
@@ -81,12 +80,22 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 PayScanner server running on port ${PORT}`);
-  if (process.env.TELEGRAM_BOT_TOKEN) {
-    require('./bot').launch();
-    console.log('🤖 Telegram bot launched');
-  }
+
+const startServer = async () => {
+  await connectDB();
+
+  app.listen(PORT, () => {
+    console.log(`🚀 PayScanner server running on port ${PORT}`);
+    if (process.env.TELEGRAM_BOT_TOKEN) {
+      require('./bot').launch();
+      console.log('🤖 Telegram bot launched');
+    }
+  });
+};
+
+startServer().catch((err) => {
+  console.error('Failed to start server:', err.message);
+  process.exit(1);
 });
 
 module.exports = app;

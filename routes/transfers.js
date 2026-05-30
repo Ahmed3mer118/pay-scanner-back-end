@@ -8,7 +8,14 @@ router.use(protect);
 
 router.get('/', ctrl.getAll);
 router.get('/:id', ctrl.getOne);
-router.post('/upload', upload.single('screenshot'), ctrl.upload);
+router.post('/upload', (req, res, next) => {
+  upload.single('screenshot')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}, ctrl.upload);
 router.patch('/:id/status', adminOnly, ctrl.updateStatus);
 router.post('/bulk-verify', adminOnly, ctrl.bulkVerify);
 router.delete('/:id', adminOnly, ctrl.deleteOne);
