@@ -98,7 +98,11 @@ exports.upload = async (req, res) => {
       telegramMeta: telegramMeta || {},
     });
 
-    const statusCode = result.success ? 201 : result.status === 'duplicate' ? 409 : 422;
+    const statusCode = result.transferId
+      ? 201
+      : result.success
+        ? 201
+        : 422;
     res.status(statusCode).json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });

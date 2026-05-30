@@ -89,7 +89,7 @@ const processTelegramImage = async ({
 
     if (result.status === 'duplicate') {
       await ctx.reply(
-        `🔁 *Duplicate Screenshot Detected*\n\nThis transfer has already been submitted and is in our system.\nTransaction ID: ${result.duplicateOf || 'N/A'}`,
+        `🔁 *Duplicate Screenshot Detected*\n\nSaved as duplicate for review.\nOriginal transfer: \`${result.duplicateOf || 'N/A'}\`\nNew record: \`${result.transferId || 'N/A'}\``,
         { parse_mode: 'Markdown' }
       );
     } else if (result.status === 'failed_ocr') {

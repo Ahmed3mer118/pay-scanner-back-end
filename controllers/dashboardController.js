@@ -8,7 +8,8 @@ exports.getStats = async (req, res) => {
     todayEnd.setHours(23, 59, 59, 999);
 
     const [
-      totalToday, totalAmount, pending, duplicates, failedOcr,
+      totalToday, totalAmount, pendingQueue, duplicatesToday, failedOcrToday,
+      totalAll, totalAmountAll, pendingAll, duplicatesAll, failedOcrAll, verifiedAll,
       byStatus, byMethod, last7Days, last30Days,
     ] = await Promise.all([
       Transfer.countDocuments({ createdAt: { $gte: today } }),
@@ -19,6 +20,15 @@ exports.getStats = async (req, res) => {
       Transfer.countDocuments({ status: 'pending' }),
       Transfer.countDocuments({ status: 'duplicate', createdAt: { $gte: today } }),
       Transfer.countDocuments({ status: 'failed_ocr', createdAt: { $gte: today } }),
+      Transfer.countDocuments({}),
+      Transfer.aggregate([
+        { $match: { status: 'verified' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
+      Transfer.countDocuments({ status: 'pending' }),
+      Transfer.countDocuments({ status: 'duplicate' }),
+      Transfer.countDocuments({ status: 'failed_ocr' }),
+      Transfer.countDocuments({ status: 'verified' }),
       Transfer.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
       Transfer.aggregate([
         { $match: { status: { $ne: 'duplicate' } } },
@@ -62,9 +72,17 @@ exports.getStats = async (req, res) => {
       today: {
         transfers: totalToday,
         amount: totalAmount[0]?.total || 0,
-        pending,
-        duplicates,
-        failedOcr,
+        pending: pendingQueue,
+        duplicates: duplicatesToday,
+        failedOcr: failedOcrToday,
+      },
+      allTime: {
+        transfers: totalAll,
+        amount: totalAmountAll[0]?.total || 0,
+        verified: verifiedAll,
+        pending: pendingAll,
+        duplicates: duplicatesAll,
+        failedOcr: failedOcrAll,
       },
       byStatus: Object.fromEntries(byStatus.map((s) => [s._id, s.count])),
       byMethod,

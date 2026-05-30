@@ -32,6 +32,7 @@ const processScreenshot = async ({
 }) => {
   const log = [];
   let uploadedImage = null;
+  let duplicateOf = null;
 
   try {
     /**
@@ -54,11 +55,12 @@ const processScreenshot = async ({
     log.push(`Hash computed: ${imageHash.slice(0, 8)}...`);
 
     /**
-     * 3. Duplicate check by image hash
+     * 3. Duplicate check by image hash (still process and save)
      */
     const existingByHash = await Transfer.findOne({ imageHash });
 
     if (existingByHash) {
+      duplicateOf = existingByHash._id;
       await saveLog(
         'warn',
         'Duplicate image hash detected',
@@ -67,13 +69,7 @@ const processScreenshot = async ({
           existingId: existingByHash._id,
         }
       );
-
-      return {
-        success: false,
-        status: 'duplicate',
-        message: 'This screenshot has already been submitted.',
-        duplicateOf: existingByHash._id,
-      };
+      log.push('Duplicate image hash — will save as duplicate');
     }
 
     /**
@@ -112,7 +108,8 @@ const processScreenshot = async ({
         imageHash,
         ocrRawText: ocrText,
         ocrConfidence,
-        status: 'failed_ocr',
+        status: duplicateOf ? 'duplicate' : 'failed_ocr',
+        duplicateOf,
         source,
         ...telegramMeta,
       });
@@ -120,10 +117,14 @@ const processScreenshot = async ({
       uploadedImage = null;
 
       return {
-        success: false,
-        status: 'failed_ocr',
+        success: !duplicateOf,
+        status: transfer.status,
         transferId: transfer._id,
-        message: 'OCR failed or returned low confidence text.',
+        transfer,
+        duplicateOf,
+        message: duplicateOf
+          ? 'Duplicate screenshot saved for review.'
+          : 'OCR failed or returned low confidence text.',
       };
     }
 
@@ -150,7 +151,7 @@ const processScreenshot = async ({
     log.push('AI parsing complete');
 
     /**
-     * 10. Duplicate check by transaction ID
+     * 10. Duplicate check by transaction ID (still save)
      */
     if (parsed.transactionId) {
       const existingByTxId =
@@ -159,16 +160,8 @@ const processScreenshot = async ({
         });
 
       if (existingByTxId) {
-        await deleteUploadedImage(uploadedImage);
-        uploadedImage = null;
-
-        return {
-          success: false,
-          status: 'duplicate',
-          message:
-            `Transaction ID ${parsed.transactionId} already exists.`,
-          duplicateOf: existingByTxId._id,
-        };
+        duplicateOf = duplicateOf || existingByTxId._id;
+        log.push(`Duplicate transaction ID: ${parsed.transactionId}`);
       }
     }
 
@@ -193,7 +186,9 @@ const processScreenshot = async ({
      */
     let status = 'pending';
 
-    if (aiValidation.tamperingDetected) {
+    if (duplicateOf) {
+      status = 'duplicate';
+    } else if (aiValidation.tamperingDetected) {
       status = 'suspicious';
     } else if (aiValidation.overallScore >= 70) {
       status = 'pending';
@@ -224,6 +219,7 @@ const processScreenshot = async ({
       ocrConfidence,
       aiParsed: true,
       aiValidation,
+      duplicateOf,
       source,
       ...telegramMeta,
     });
@@ -231,36 +227,50 @@ const processScreenshot = async ({
     uploadedImage = null;
 
     /**
-     * 14. Sync Google Sheets
+     * 14. Sync Google Sheets (skip duplicates)
      */
-    try {
-      const rowIndex =
-        await appendTransfer(transfer);
+    if (status !== 'duplicate') {
+      try {
+        const rowIndex =
+          await appendTransfer(transfer);
 
-      if (rowIndex) {
+        if (rowIndex) {
 
-        await Transfer.findByIdAndUpdate(
-          transfer._id,
-          {
-            sheetsSynced: true,
-            sheetsRowIndex: rowIndex,
-          }
+          await Transfer.findByIdAndUpdate(
+            transfer._id,
+            {
+              sheetsSynced: true,
+              sheetsRowIndex: rowIndex,
+            }
+          );
+        }
+
+      } catch (sheetErr) {
+
+        console.warn(
+          'Sheets sync failed:',
+          sheetErr.message
         );
       }
-
-    } catch (sheetErr) {
-
-      console.warn(
-        'Sheets sync failed:',
-        sheetErr.message
-      );
     }
 
     log.push('Transfer saved');
 
     /**
-     * 15. Success response
+     * 15. Response
      */
+    if (status === 'duplicate') {
+      return {
+        success: true,
+        status: 'duplicate',
+        transferId: transfer._id,
+        transfer,
+        duplicateOf,
+        aiValidation,
+        message: 'Duplicate screenshot saved. This image was already submitted.',
+      };
+    }
+
     return {
       success: true,
       status,
