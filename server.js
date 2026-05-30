@@ -93,9 +93,15 @@ const startServer = async () => {
   });
 };
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err.message);
-  process.exit(1);
-});
+if (!process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err.message);
+    process.exit(1);
+  });
+} else {
+  connectDB().catch((err) => {
+    console.error('MongoDB connection failed:', err.message);
+  });
+}
 
 module.exports = app;

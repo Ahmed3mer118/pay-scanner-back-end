@@ -1,7 +1,25 @@
 const Transfer = require('../models/Transfer');
-const { processScreenshot } = require('../services/processingService');
+const { storeScreenshot, analyzeTransfer } = require('../services/processingService');
 const { updateStatus } = require('../services/sheetsService');
 const { resolveImageInput } = require('../services/imageService');
+const { normalizeTelegramMeta } = require('../utils/telegramMeta');
+
+const buildImageInput = (req) => {
+  const { buffer, base64, filename, mimeType } = req.body;
+
+  if (req.file) {
+    return {
+      buffer: req.file.buffer,
+      mimeType: req.file.mimetype,
+      filename: req.file.originalname,
+    };
+  }
+
+  return {
+    ...resolveImageInput({ buffer, base64, mimeType }),
+    filename: filename || 'api_upload.jpg',
+  };
+};
 
 exports.getAll = async (req, res) => {
   try {
@@ -58,72 +76,63 @@ exports.getOne = async (req, res) => {
   }
 };
 
+/** Phase 1 — save image quickly */
 exports.upload = async (req, res) => {
   try {
-    const {
-      buffer,
-      base64,
-      filename,
-      mimeType,
-      source,
-      telegramMeta,
-    } = req.body;
+    const { source, telegramMeta } = req.body;
 
-    if (!req.file && !buffer && !base64) {
+    if (!req.file && !req.body.buffer && !req.body.base64) {
       return res.status(400).json({
         error: 'No image provided. Send multipart file or base64 payload.',
       });
     }
 
-    const imageInput = req.file
-      ? {
-          buffer: req.file.buffer,
-          mimeType: req.file.mimetype,
-          filename: req.file.originalname,
-        }
-      : {
-          ...resolveImageInput({
-            buffer,
-            base64,
-            mimeType,
-          }),
-          filename: filename || 'api_upload.jpg',
-        };
+    const imageInput = buildImageInput(req);
+    let meta = telegramMeta || {};
+    if (typeof meta === 'string') {
+      try { meta = JSON.parse(meta); } catch { meta = {}; }
+    }
 
-    const result = await processScreenshot({
+    const result = await storeScreenshot({
       buffer: imageInput.buffer,
       mimeType: imageInput.mimeType,
       filename: imageInput.filename,
       source: normalizeSource(source),
-      telegramMeta: telegramMeta || {},
+      telegramMeta: normalizeTelegramMeta(meta),
     });
 
-    const statusCode = result.transferId
-      ? 201
-      : result.success
-        ? 201
-        : 422;
-    res.status(statusCode).json(result);
+    res.status(201).json(result);
   } catch (error) {
     if (error.name === 'ValidationError') {
       const details = Object.values(error.errors || {}).map((e) => e.message);
-      return res.status(400).json({
-        error: 'Transfer validation failed',
-        details,
-      });
+      return res.status(400).json({ error: 'Transfer validation failed', details });
     }
 
     console.error('Upload error:', error);
-    res.status(500).json({
-      error: error.message || 'Failed to process screenshot',
-    });
+    res.status(500).json({ error: error.message || 'Failed to store screenshot' });
+  }
+};
+
+/** Phase 2 — OCR + AI (long-running) */
+exports.analyze = async (req, res) => {
+  try {
+    const result = await analyzeTransfer(req.params.id);
+    const statusCode = result.transferId ? 200 : 422;
+    res.status(statusCode).json(result);
+  } catch (error) {
+    if (error.message === 'Transfer not found') {
+      return res.status(404).json({ error: error.message });
+    }
+
+    console.error('Analyze error:', error);
+    res.status(500).json({ error: error.message || 'Analysis failed' });
   }
 };
 
 exports.updateStatus = async (req, res) => {
   try {
     const { status, adminNotes } = req.body;
-    const allowed = ['pending', 'verified', 'suspicious', 'duplicate', 'failed_ocr'];
+    const allowed = ['processing', 'pending', 'verified', 'suspicious', 'duplicate', 'failed_ocr'];
     if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid status' });
 
     const update = { status, adminNotes };
@@ -135,7 +144,6 @@ exports.updateStatus = async (req, res) => {
     const transfer = await Transfer.findByIdAndUpdate(req.params.id, update, { new: true });
     if (!transfer) return res.status(404).json({ error: 'Transfer not found' });
 
-    // Sync status to Google Sheets
     if (transfer.sheetsRowIndex) {
       await updateStatus(transfer.sheetsRowIndex, status).catch(() => {});
     }
@@ -173,15 +181,6 @@ exports.bulkVerify = async (req, res) => {
 };
 
 const normalizeSource = (value) => {
-  const allowedSources = new Set([
-    'telegram',
-    'whatsapp',
-    'manual',
-    'api',
-    'n8n',
-  ]);
-
-  return allowedSources.has(value)
-    ? value
-    : 'api';
+  const allowedSources = new Set(['telegram', 'whatsapp', 'manual', 'api', 'n8n']);
+  return allowedSources.has(value) ? value : 'api';
 };

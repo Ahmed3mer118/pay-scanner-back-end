@@ -16,7 +16,7 @@ const transferSchema = new mongoose.Schema({
   transferDate: { type: Date },
   status: {
     type: String,
-    enum: ['pending', 'verified', 'duplicate', 'suspicious', 'failed_ocr'],
+    enum: ['processing', 'pending', 'verified', 'duplicate', 'suspicious', 'failed_ocr'],
     default: 'pending',
   },
 

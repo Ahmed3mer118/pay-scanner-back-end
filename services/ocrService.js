@@ -1,4 +1,17 @@
 const Tesseract = require('tesseract.js');
+const sharp = require('sharp');
+
+/**
+ * Resize for faster OCR (especially on serverless).
+ */
+const prepareForOcr = async (imageBuffer) => {
+  return sharp(imageBuffer)
+    .rotate()
+    .resize({ width: 960, fit: 'inside', withoutEnlargement: true })
+    .greyscale()
+    .png()
+    .toBuffer();
+};
 
 /**
  * Run OCR on an in-memory image buffer
@@ -10,7 +23,9 @@ const extractText = async (imageBuffer) => {
       throw new Error('OCR requires a non-empty image buffer.');
     }
 
-    const result = await Tesseract.recognize(imageBuffer, 'ara+eng', {
+    const ocrBuffer = await prepareForOcr(imageBuffer);
+
+    const result = await Tesseract.recognize(ocrBuffer, 'ara+eng', {
       logger: () => {},
     });
 
@@ -47,4 +62,4 @@ const detectPaymentProvider = (text) => {
   return 'Unknown';
 };
 
-module.exports = { extractText, detectPaymentProvider };
+module.exports = { extractText, detectPaymentProvider, prepareForOcr };
