@@ -126,23 +126,21 @@ function parseDetectedDate(value) {
 /**
  * Validate parsed data and compute AI validation object
  */
-const validateParsedData = (parsed, imageHash, existingHashes = []) => {
-  const duplicateHash = existingHashes.includes(imageHash);
+const validateParsedData = (parsed) => {
   const amountValid = parsed.amount !== null && parsed.amount > 0 && parsed.amount < 10000000;
   const phoneRegex = /^01[0-9]{9}$/;
   const phoneValid = parsed.senderPhone ? phoneRegex.test(parsed.senderPhone) : false;
 
   const overallScore = [
-    !duplicateHash,
     amountValid,
     phoneValid,
     parsed.senderName !== null,
     parsed.transactionId !== null,
     !parsed.flags?.likelyEdited,
-  ].filter(Boolean).length / 6 * 100;
+  ].filter(Boolean).length / 5 * 100;
 
   return {
-    duplicateHash: !duplicateHash,
+    duplicateHash: true,
     duplicateTransactionId: true,
     amountValid,
     phoneValid,

@@ -17,18 +17,11 @@ const { normalizeTelegramMeta } = require('../utils/telegramMeta');
 const Transfer = require('../models/Transfer');
 const { Log } = require('../models/Log');
 
-const buildStoredImageHash = (imageHash, duplicateOf) => {
-  if (!duplicateOf) return imageHash;
-  return `${imageHash}:dup:${Date.now()}`;
+const findDuplicateByHash = (imageHash, excludeId = null) => {
+  const filter = { imageHash };
+  if (excludeId) filter._id = { $ne: excludeId };
+  return Transfer.findOne(filter).sort({ createdAt: 1 });
 };
-
-const findExistingByHash = (imageHash) =>
-  Transfer.findOne({
-    $or: [
-      { imageHash },
-      { imageHash: new RegExp(`^${imageHash}(:dup:|$)`) },
-    ],
-  });
 
 const saveLog = async (level, message, context) => {
   try {
@@ -66,8 +59,6 @@ const storeScreenshot = async ({
 }) => {
   const imageBuffer = resolveBuffer({ buffer, base64, mimeType });
   const imageHash = computeImageHash(imageBuffer);
-  const existingByHash = await findExistingByHash(imageHash);
-  const duplicateOf = existingByHash?._id || null;
   const meta = normalizeTelegramMeta(telegramMeta);
 
   const enhancedBuffer = await enhanceImage(imageBuffer);
@@ -78,9 +69,8 @@ const storeScreenshot = async ({
 
   const transfer = await Transfer.create({
     imageUrl: uploadedImage.secure_url,
-    imageHash: buildStoredImageHash(imageHash, duplicateOf),
+    imageHash,
     status: 'processing',
-    duplicateOf,
     source,
     paymentMethod: 'Unknown',
     ...meta,
@@ -93,8 +83,6 @@ const storeScreenshot = async ({
     status: 'processing',
     transferId: transfer._id,
     transfer,
-    duplicateOf,
-    imageHash,
     message: 'Screenshot saved. Analysis in progress.',
   };
 };
@@ -180,8 +168,7 @@ const analyzeTransfer = async (transferId) => {
     }
   }
 
-  const allHashes = await Transfer.distinct('imageHash');
-  const aiValidation = validateParsedData(parsed, rawHash, allHashes);
+  const aiValidation = validateParsedData(parsed);
 
   let status = 'pending';
   if (duplicateOf) {

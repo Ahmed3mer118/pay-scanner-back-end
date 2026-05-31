@@ -56,7 +56,6 @@ const transferSchema = new mongoose.Schema({
   duplicateOf: { type: mongoose.Schema.Types.ObjectId, ref: 'Transfer' },
 }, { timestamps: true });
 
-transferSchema.index({ imageHash: 1 });
 transferSchema.index({ transactionId: 1 });
 transferSchema.index({ status: 1 });
 transferSchema.index({ paymentMethod: 1 });

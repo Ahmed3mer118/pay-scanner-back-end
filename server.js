@@ -67,7 +67,13 @@ app.use('/api/bot', botRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  const mongoose = require('mongoose');
+  const dbConnected = mongoose.connection.readyState === 1;
+  res.json({
+    status: dbConnected ? 'ok' : 'degraded',
+    dbConnected,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // Global error handler
@@ -82,7 +88,10 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
-  await connectDB();
+  const dbReady = await connectDB();
+  if (!dbReady) {
+    console.warn('⚠️  Server starting without MongoDB — will retry in background');
+  }
 
   app.listen(PORT, () => {
     console.log(`🚀 PayScanner server running on port ${PORT}`);
